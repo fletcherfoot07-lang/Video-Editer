@@ -57,10 +57,10 @@ def v_curve(n_out, min_speed, max_speed):
 def hero_curve(n_out, max_speed, min_speed):
     """Fast whip in, then long ease-out into very slow motion."""
     x = np.linspace(0, 1, n_out)
-    return min_speed + (max_speed - min_speed) * np.exp(-x * 9)
+    return min_speed + (max_speed - min_speed) * np.exp(-x * 4)
 
 
-def render_shot(frames, src_fps, speeds, punch=0.0, fade_out=0):
+def render_shot(frames, src_fps, speeds, punch=0.0, fade_out=0, drift=0.0):
     """Resample frames along the speed curve. Fast sections blend all source
     frames covered by the output frame (motion blur); slow sections blend the
     two nearest frames (smooth slow-mo)."""
@@ -82,6 +82,7 @@ def render_shot(frames, src_fps, speeds, punch=0.0, fade_out=0):
             f = frames[lo] * (1 - fr) + frames[lo + 1] * fr
         # zoom punch decaying over the first frames of the shot
         z = 1 + punch * np.exp(-i / 3.0)
+        z += drift * (i / max(n - 1, 1)) ** 1.5   # slow push-in (hero shot)
         if z > 1.002:
             f = zoom(f, z)
         if fade_out and i >= n - fade_out:
@@ -98,6 +99,15 @@ def zoom(img, z):
     yi = (np.arange(h) * ch / h).astype(int)
     xi = (np.arange(w) * cw / w).astype(int)
     return crop[yi][:, xi]
+
+
+def trim_static_tail(frames, thresh=2.0):
+    small = frames[:, ::16, ::16].astype(np.float32).mean(-1)
+    d = np.abs(np.diff(small, axis=0)).mean((1, 2))
+    end = len(frames)
+    while end > 3 and d[end - 2] < thresh:
+        end -= 1
+    return frames[:end]
 
 
 def best_window(path, length, src_fps, used=()):
@@ -169,7 +179,7 @@ def main():
                 n_out = max(int(round(REFERENCE_END * FPS)) - total, 30)
             else:
                 n_out = int(round(a.hero_seconds * FPS))
-            speeds = hero_curve(n_out, a.max_speed, 0.15)
+            speeds = hero_curve(n_out, a.max_speed, 0.3)
         else:
             if cuts and k < len(cuts):
                 n_out = int(round(cuts[k] * FPS)) - total
@@ -179,13 +189,20 @@ def main():
             n_out = max(n_out, 6)
             speeds = v_curve(n_out, a.min_speed, a.max_speed)
         need = speeds.sum() / FPS + 0.2
-        s, l = best_window(clip, need, src_fps, used.get(clip, []))
+        prev = used.get(clip, [])
+        s, l = best_window(clip, need, src_fps, prev)
+        repeat = any(s < u1 and s + l > u0 for u0, u1 in prev)
         used.setdefault(clip, []).append((s, s + l))
         frames = load_frames(clip, s, l, w, h)
+        if hero:                              # drop a motionless tail
+            frames = trim_static_tail(frames)
+        if repeat and not hero and sum(1 for _ in prev) % 2 == 1:
+            frames = frames[::-1]             # reuse footage in reverse for variety
         if len(frames) < 3:
             print(f"skipping {clip}: too short", file=sys.stderr); continue
         out = render_shot(frames, src_fps, speeds, punch=0 if k == 0 else a.punch,
-                          fade_out=int(0.4 * FPS) if hero else 0)
+                          fade_out=int(0.4 * FPS) if hero else 0,
+                          drift=0.08 if hero else 0.0)
         for f in out:
             enc.stdin.write(f.tobytes())
         total += len(out)
