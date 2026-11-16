@@ -13,12 +13,19 @@ Reference style (measured from the reference video):
 
 Usage:
   python3 speed_ramp_edit.py clips/*.mp4 -o out.mp4 [--audio song.mp3] [--bpm 113]
+  python3 speed_ramp_edit.py clips/*.mp4 -o out.mp4 --cuts reference --audio audio/reference_audio.m4a
   Clips are used in the order given; the last clip becomes the hero shot.
 """
 import argparse, json, subprocess, sys
 import numpy as np
 
 W, H, FPS = 1080, 1920, 30
+
+# Cut points measured from the reference video (seconds). 15 quick shots,
+# then the hero shot holds until REFERENCE_END (where the outro started).
+REFERENCE_CUTS = [0.23, 0.63, 1.27, 1.80, 2.30, 2.73, 3.37, 3.87, 4.40,
+                  4.80, 5.43, 5.97, 6.47, 6.87, 8.03]
+REFERENCE_END = 12.47
 
 
 def probe(path):
@@ -93,8 +100,9 @@ def zoom(img, z):
     return crop[yi][:, xi]
 
 
-def best_window(path, length, src_fps):
-    """Pick the most visually active window in the clip (the bit worth ramping)."""
+def best_window(path, length, src_fps, used=()):
+    """Pick the most visually active window in the clip (the bit worth ramping),
+    avoiding windows already used earlier in the edit."""
     _, dur = probe(path)
     if dur <= length:
         return 0.0, dur
@@ -107,6 +115,11 @@ def best_window(path, length, src_fps):
     if len(m) <= win:
         return 0.0, dur
     score = np.convolve(m, np.ones(win), "valid")
+    for u0, u1 in used:                       # penalise overlap with used windows
+        lo = max(0, int((u0 - length) * 10)); hi = int(u1 * 10)
+        score[lo:hi] -= 1e9
+    if score.max() < -1e8:                    # everything used: allow repeats
+        score += 1e9 * (score < -1e8)
     s = int(score.argmax()) / 10.0
     return s, length
 
@@ -120,6 +133,9 @@ def main():
     ap.add_argument("--bpm", type=float, default=113.0)
     ap.add_argument("--beats-per-shot", type=int, default=1)
     ap.add_argument("--hero-seconds", type=float, default=4.2)
+    ap.add_argument("--cuts", default=None,
+                    help="comma-separated cut times in seconds (overrides --bpm grid); "
+                         "use 'reference' for the reference edit's exact cut points")
     ap.add_argument("--min-speed", type=float, default=0.25)
     ap.add_argument("--max-speed", type=float, default=3.5)
     ap.add_argument("--punch", type=float, default=0.06)
@@ -128,25 +144,43 @@ def main():
     w = a.width; h = int(round(w * 16 / 9 / 2)) * 2
 
     shot_len = 60.0 / a.bpm * a.beats_per_shot
+    cuts = None
+    if a.cuts:
+        cuts = REFERENCE_CUTS if a.cuts == "reference" else [float(c) for c in a.cuts.split(",")]
     enc = subprocess.Popen([
         "ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
         "-s", f"{w}x{h}", "-r", str(FPS), "-i", "-",
         "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
         a.out + ".video.mp4"], stdin=subprocess.PIPE)
 
+    # Build the shot list. With reference cuts, cycle through the clips
+    # (last clip reserved for the hero shot) until every cut slot is filled.
+    seq = list(a.clips)
+    if cuts and len(seq) > 1 and len(seq) - 1 < len(cuts):
+        pool = seq[:-1]
+        seq = [pool[i % len(pool)] for i in range(len(cuts))] + [seq[-1]]
+    used = {}
     frame_pos = 0.0; total = 0
-    for k, clip in enumerate(a.clips):
-        hero = k == len(a.clips) - 1 and len(a.clips) > 1
+    for k, clip in enumerate(seq):
+        hero = k == len(seq) - 1 and len(seq) > 1
         src_fps, _ = probe(clip)
         if hero:
-            n_out = int(round(a.hero_seconds * FPS))
+            if cuts and k >= len(cuts):   # hero runs to the reference's end point
+                n_out = max(int(round(REFERENCE_END * FPS)) - total, 30)
+            else:
+                n_out = int(round(a.hero_seconds * FPS))
             speeds = hero_curve(n_out, a.max_speed, 0.15)
         else:
-            frame_pos += shot_len * FPS          # keep cuts locked to the beat grid
-            n_out = int(round(frame_pos)) - total
+            if cuts and k < len(cuts):
+                n_out = int(round(cuts[k] * FPS)) - total
+            else:
+                frame_pos = max(frame_pos, total) + shot_len * FPS  # beat grid
+                n_out = int(round(frame_pos)) - total
+            n_out = max(n_out, 6)
             speeds = v_curve(n_out, a.min_speed, a.max_speed)
         need = speeds.sum() / FPS + 0.2
-        s, l = best_window(clip, need, src_fps)
+        s, l = best_window(clip, need, src_fps, used.get(clip, []))
+        used.setdefault(clip, []).append((s, s + l))
         frames = load_frames(clip, s, l, w, h)
         if len(frames) < 3:
             print(f"skipping {clip}: too short", file=sys.stderr); continue
@@ -155,7 +189,7 @@ def main():
         for f in out:
             enc.stdin.write(f.tobytes())
         total += len(out)
-        print(f"[{k+1}/{len(a.clips)}] {clip}: {len(out)} frames from {s:.2f}s", file=sys.stderr)
+        print(f"[{k+1}/{len(seq)}] {clip}: {len(out)} frames from {s:.2f}s", file=sys.stderr)
     enc.stdin.close(); enc.wait()
 
     if a.audio:
