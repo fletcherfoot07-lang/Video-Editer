@@ -2,36 +2,34 @@
 """
 Branded 9:16 social reel for 1st Touch Football Kickz holiday camps.
 
-Mixes photos and video clips into one beat-synced reel:
-  intro (wordmark/logo + "HOLIDAY CAMP")  ->  one shot per media item
-  (photos get a Ken Burns drift then a punch-in on the beat, videos play
-  through)  with bold captions  ->  "BOOK NOW" outro.
+Photos-only, beat-synced reel: every frame is built from the photos.
+  intro (wordmark/logo + "HOLIDAY CAMP" over a darkened photo)  ->  one shot
+  per photo (Ken Burns drift, then a punch-in on the beat) with bold
+  captions  ->  "BOOK NOW" outro over a split-screen collage of the photos.
 
 Brand: #00FF00 green, heavy font (Filson Pro Heavy if you pass --font),
 official logo if you pass --logo (transparent PNG). Without them it falls
 back to Inter Black and a text wordmark.
 
 Usage:
-  python3 camp_reel.py clips/3.jpg clips/2.jpg clips/1.jpg clips/drill.mp4 \
-      --captions "FUN EVERY|DAY" "BUILD|CONFIDENCE" "LEARN NEW|SKILLS" "GAME|TIME" \
-      --focus 0.5,0.35 0.53,0.28 0.47,0.27 0.5,0.5 \
+  python3 camp_reel.py clips/3.jpg clips/2.jpg clips/1.jpg \
+      --captions "FUN EVERY|DAY" "BUILD|CONFIDENCE" "LEARN NEW|SKILLS" \
+      --focus 0.5,0.33 0.53,0.27 0.47,0.27 \
       --logo brand/logo.png --font brand/FilsonProHeavy.otf \
       --audio audio/reference_audio.m4a -o output/camp_reel.mp4
 
   Caption "A|B": A is white, B sits in a green box. --focus x,y (0-1) is the
-  point each photo punches in on (faces). For videos, --starts gives the
-  second to start each clip from (photos ignore it).
+  point each photo punches in on (faces).
 """
-import argparse, json, os, subprocess
+import argparse, os, subprocess
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 W, H, FPS = 1080, 1920, 30
 GREEN = (0, 255, 0)
 DARK = (8, 10, 8)
 WHITE = (255, 255, 255)
 FALLBACK_FONT = "/usr/share/fonts/opentype/inter/Inter-Black.otf"
-VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 
 
 # ---------------------------------------------------------------- easing
@@ -142,23 +140,6 @@ def paste_scaled(img, mark, cx, cy, scale, alpha=1.0, rot=0):
 
 
 # ---------------------------------------------------------------- media
-def probe(path):
-    out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries",
-                                   "format=duration", "-of", "json", path])
-    return float(json.loads(out)["format"]["duration"])
-
-
-def load_video(path, start, length):
-    """Decode a clip to 30fps 1080x1920 RGB frames (cover-cropped)."""
-    vf = f"fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1"
-    raw = subprocess.check_output(["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length + .5:.3f}",
-                                   "-i", path, "-vf", vf, "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])
-    fr = np.frombuffer(raw, np.uint8).reshape(-1, H, W, 3)
-    if len(fr) == 0:
-        raise SystemExit(f"could not decode {path}")
-    return fr
-
-
 def photo_frame(src, t, dur, focus):
     """Ken Burns: wide drift for the first half, then a punch-in on the focus point."""
     sw, sh = src.size
@@ -226,7 +207,7 @@ def intro(t, dur, T, mark, bg_photo):
         z = 1.15 - 0.08 * t / dur
         cw, ch = W / z, H / z
         bg = bg_photo.resize((W, H), Image.BICUBIC, box=((W - cw) / 2, (H - ch) / 2, (W + cw) / 2, (H + ch) / 2))
-        bg = Image.blend(bg, Image.new("RGB", (W, H), DARK), 0.72).convert("RGBA")
+        bg = Image.blend(bg, Image.new("RGB", (W, H), DARK), 0.62).convert("RGBA")
         img.alpha_composite(bg)
     stripes(img, t)
     # green bars slamming in top & bottom
@@ -263,9 +244,26 @@ def shot_overlay(img, t, dur, T, mark, caption, idx, n, total_t, total):
     d.rectangle([0, H - 14, int(W * total_t / total), H], fill=GREEN)
 
 
-def outro(t, dur, T, mark):
-    img = Image.new("RGBA", (W, H), DARK + (255,))
-    stripes(img, t, speed=500)
+def collage(t, strips):
+    """Photos as vertical strips sliding in (alternate up/down), darkened."""
+    img = Image.new("RGB", (W, H), DARK)
+    n = len(strips)
+    sw = W // n
+    for i, st in enumerate(strips):
+        p = ease_out((t - 0.08 * i) / 0.5)
+        dy = int((1 - p) * H * (1 if i % 2 else -1))
+        drift = int(40 * (t / 4) * (1 if i % 2 else -1))
+        img.paste(st.crop((0, 60 + drift, sw, 60 + drift + H)), (i * sw, dy))
+    img = Image.blend(img, Image.new("RGB", (W, H), DARK), 0.74).convert("RGBA")
+    d = ImageDraw.Draw(img)
+    for i in range(1, n):            # thin green dividers between strips
+        d.rectangle([i * sw - 4, 0, i * sw + 4, H], fill=GREEN)
+    return img
+
+
+def outro(t, dur, T, mark, strips):
+    img = collage(t, strips)
+    stripes(img, t, alpha=0.6, speed=500)
     # green wipe that clears to reveal the dark card
     wipe = ease_in_out(t / 0.4)
     d = ImageDraw.Draw(img)
@@ -279,7 +277,7 @@ def outro(t, dur, T, mark):
         draw_text(img, "HOLIDAY CAMPS", T(112), W / 2, y + 120 + 50 * (1 - p), WHITE, alpha=int(255 * p))
     if t > 0.75:
         p = ease_out((t - 0.75) / 0.3)
-        draw_text(img, "FUN  •  SKILLS  •  FRIENDS", T(50), W / 2, y + 225, GREEN, shadow=False, alpha=int(255 * p))
+        draw_text(img, "FUN  •  SKILLS  •  FRIENDS", T(50), W / 2, y + 225, GREEN, alpha=int(255 * p))
     # pulsing BOOK NOW button
     if t > 1.0:
         pulse = 1 + 0.04 * np.sin((t - 1.0) * 2 * np.pi / 0.53) if t > 1.35 else 1
@@ -301,11 +299,10 @@ def outro(t, dur, T, mark):
 # ---------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("media", nargs="+", help="photos and/or videos, in order")
+    ap.add_argument("photos", nargs="+", help="photos, in order")
     ap.add_argument("-o", "--out", default="output/camp_reel.mp4")
     ap.add_argument("--captions", nargs="*", default=[])
     ap.add_argument("--focus", nargs="*", default=[], help="x,y per item (0-1)")
-    ap.add_argument("--starts", nargs="*", type=float, default=[], help="video start second per item")
     ap.add_argument("--logo", help="official logo, transparent PNG")
     ap.add_argument("--font", default=FALLBACK_FONT, help="Filson Pro Heavy .otf/.ttf")
     ap.add_argument("--audio")
@@ -326,27 +323,26 @@ def main():
     beat = 60 / a.bpm
     intro_d = a.intro_beats * beat
     shot_d = a.beats_per_shot * beat
-    n = len(a.media)
+    n = len(a.photos)
     total = intro_d + n * shot_d + a.outro
     nf = int(round(total * FPS))
 
     items = []
-    for i, p in enumerate(a.media):
+    for i, p in enumerate(a.photos):
         focus = tuple(map(float, a.focus[i].split(","))) if i < len(a.focus) else (0.5, 0.4)
         cap = a.captions[i] if i < len(a.captions) else ""
-        if os.path.splitext(p)[1].lower() in VIDEO_EXT:
-            st = a.starts[i] if i < len(a.starts) else max(0.0, (probe(p) - shot_d) / 2)
-            items.append(("video", load_video(p, st, shot_d), focus, cap))
-        else:
-            im = Image.open(p)
-            try:
-                from PIL import ImageOps
-                im = ImageOps.exif_transpose(im)
-            except Exception:
-                pass
-            items.append(("photo", im.convert("RGB"), focus, cap))
+        im = ImageOps.exif_transpose(Image.open(p)).convert("RGB")
+        items.append((im, focus, cap))
 
-    bg_photo = next((photo_frame(it[1], 0, 1, it[2]) for it in items if it[0] == "photo"), None)
+    bg_photo = photo_frame(items[0][0], 0, 1, items[0][1])
+    # outro strips: each photo cropped around its focus point, n strips across
+    sw = W // min(n, 4)
+    strips = []
+    for im, focus, _ in items[:4]:
+        sc = (H + 160) / im.height
+        big = im.resize((int(im.width * sc), H + 160), Image.LANCZOS)
+        x0 = int(clamp(focus[0] * big.width - sw / 2, 0, big.width - sw))
+        strips.append(big.crop((x0, 0, x0 + sw, H + 160)))
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     silent = a.out + ".video.mp4"
@@ -361,14 +357,11 @@ def main():
         elif t < intro_d + n * shot_d:
             k = int((t - intro_d) // shot_d)
             lt = t - intro_d - k * shot_d
-            kind, src, focus, cap = items[k]
-            if kind == "photo":
-                base = photo_frame(src, lt, shot_d, focus)
-            else:
-                base = Image.fromarray(src[min(int(lt * FPS), len(src) - 1)])
+            src, focus, cap = items[k]
+            base = photo_frame(src, lt, shot_d, focus)
             # zoom punch on the cut and on the mid-shot beat (photo punch-in)
             pa = 0.09 * (1 - ease_out(lt / 0.25))
-            if kind == "photo" and lt >= shot_d / 2:
+            if lt >= shot_d / 2:
                 pa = 0.07 * (1 - ease_out((lt - shot_d / 2) / 0.25))
             base = grade(punch(base, pa)).convert("RGBA")
             # flash on the cut
@@ -378,7 +371,7 @@ def main():
             shot_overlay(base, lt, shot_d, T, mark, cap, k, n, t, total)
             img = base
         else:
-            img = outro(t - intro_d - n * shot_d, a.outro, T, mark)
+            img = outro(t - intro_d - n * shot_d, a.outro, T, mark, strips)
         enc.stdin.write(np.asarray(img.convert("RGB")).tobytes())
     enc.stdin.close()
     enc.wait()
