@@ -42,13 +42,20 @@ def shot_times(shots, beats, total):
 
 def render_shot(src, t_in, dur, speed, zoom, out):
     nframes = round(dur * FPS)
+    clip_len = duration(src) - 0.05
+    if dur * speed > clip_len:           # clip too short: slow it down to fit
+        speed = clip_len / dur
     src_len = dur * speed
+    if t_in in (None, "mid"):            # centre the window in the clip
+        t_in = (clip_len - src_len) / 2
+    t_in = max(0.0, min(float(t_in), clip_len - src_len))
     # slow, continuous push-in / pull-out for a bit of life on every shot
     z0, z1 = {"in": (1.0, 1.08), "out": (1.08, 1.0), "none": (1.03, 1.03)}[zoom]
-    z = f"({z0}+({z1}-{z0})*t/{dur:.3f})"
-    vf = (f"setpts=PTS/{speed},fps={FPS},"
-          f"crop=w=iw/{z}:h=ih/{z}:x=(iw-ow)/2:y=(ih-oh)/2,"
-          f"scale={W}:{H}:flags=lanczos,setsar=1")
+    z = f"({z0}+({z1}-{z0})*on/{max(nframes - 1, 1)})"
+    # upscale 2x first so zoompan's whole-pixel crop steps don't visibly jitter
+    vf = (f"setpts=PTS/{speed},fps={FPS},scale={2 * W}:{2 * H}:flags=bicubic,"
+          f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:"
+          f"s={W}x{H}:fps={FPS},setsar=1")
     run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t_in:.3f}", "-t", f"{src_len + 0.5:.3f}",
          "-i", src, "-vf", vf, "-frames:v", str(nframes), "-an",
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p", out])
@@ -74,8 +81,9 @@ def main():
     beats = json.load(open(a.beats))
     total = duration(a.audio)
     times = shot_times(shots, beats, total)
-    work = a.work or tempfile.mkdtemp()
+    work = os.path.abspath(a.work or tempfile.mkdtemp())
     os.makedirs(work, exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
 
     # 1. render each shot to exact frame length (cumulative rounding -> no drift)
     parts = []
@@ -85,7 +93,7 @@ def main():
         render_shot(os.path.join(a.clips, s["clip"] + ".mp4"), s["in"], (f1 - f0) / FPS,
                     s.get("speed", 1.0), s.get("zoom", "in"), out)
         parts.append(out)
-        print(f"{i:3d} {times[i]:7.2f}-{times[i+1]:7.2f} {s['clip']} @{s['in']}", flush=True)
+        print(f"{i:3d} {times[i]:7.2f}-{times[i+1]:7.2f} {s['clip']}", flush=True)
     lst = os.path.join(work, "list.txt")
     with open(lst, "w") as fh:
         fh.writelines(f"file '{p}'\n" for p in parts)
