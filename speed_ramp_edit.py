@@ -27,6 +27,9 @@ REFERENCE_CUTS = [0.23, 0.63, 1.27, 1.80, 2.30, 2.73, 3.37, 3.87, 4.40,
                   4.80, 5.43, 5.97, 6.47, 6.87, 8.03]
 REFERENCE_END = 12.47
 
+# Colour grade: slightly lower exposure, more contrast and saturation.
+GRADE = "eq=brightness=-0.04:contrast=1.12:saturation=1.25"
+
 
 def probe(path):
     out = subprocess.check_output([
@@ -150,6 +153,8 @@ def main():
     ap.add_argument("--max-speed", type=float, default=3.5)
     ap.add_argument("--punch", type=float, default=0.06)
     ap.add_argument("--width", type=int, default=W)
+    ap.add_argument("--grade", action="store_true",
+                    help="slightly darker exposure, more contrast and saturation")
     a = ap.parse_args()
     w = a.width; h = int(round(w * 16 / 9 / 2)) * 2
 
@@ -160,6 +165,7 @@ def main():
     enc = subprocess.Popen([
         "ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
         "-s", f"{w}x{h}", "-r", str(FPS), "-i", "-",
+        *(["-vf", GRADE] if a.grade else []),
         "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
         a.out + ".video.mp4"], stdin=subprocess.PIPE)
 
