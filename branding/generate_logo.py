@@ -23,11 +23,16 @@ TRACK = 12 + BOLD        # letter spacing (px), widened to absorb the stroke
 BLACK, WHITE = '#0A0A0A', '#FFFFFF'
 
 # signature F geometry (cap height = 100)
-STEM_W, BAR_H, GAP = 36, 36, 12   # stem and bars share one thickness
+# Taken from Anton's own F (stem 352u, arm 339u at 798-1137u) so the F has
+# exactly the same stroke weight as every other letter. All F parts get the
+# same BOLD stroke as the letters.
+STEM_W = 352 * S
+BAR_H = 339 * S
+GAP = 16 + BOLD
 TOP = -100 - GAP - BAR_H           # top of overbar
-ARM_W, ARM_Y0, ARM_Y1 = 36, -68, -32   # arm centred on cap height
-STRIPES = [8, 11, 14]              # speed stripes, thin -> thick toward the F
-STRIPE_GAP = 6
+ARM_W, ARM_Y0, ARM_Y1 = 332 * S, -1137 * S, -798 * S
+STRIPES = [1.5, 3.5, 5.5]     # speed stripes, thin -> thick toward the F
+STRIPE_GAP = 6 + BOLD
 
 
 def glyph(ch, x):
@@ -49,12 +54,17 @@ def poly(pts):
     return 'M' + ' L'.join(f'{x:.2f},{y:.2f}' for x, y in pts) + ' Z'
 
 
-def stripes(fg):
+def stripes():
     out, x = [], 0.0
     for w in reversed(STRIPES):
         x -= STRIPE_GAP + w
-        out.append(f'<path d="{poly([(x, 0), (x + w, 0), (x + w, TOP), (x, TOP)])}" fill="{fg}"/>')
-    return ''.join(out), x
+        out.append(poly([(x, 0), (x + w, 0), (x + w, TOP), (x, TOP)]))
+    return out, x
+
+
+def stroked(fg, paths):
+    return (f'<g fill="{fg}" stroke="{fg}" stroke-width="{BOLD}" stroke-linejoin="miter" '
+            f'stroke-miterlimit="4">' + ''.join(f'<path d="{d}"/>' for d in paths) + '</g>')
 
 
 def corners(fg, x0, y0, x1, y1, L, T):
@@ -70,8 +80,8 @@ def build(fg, brackets=True):
     shapes, letters = [], []
     # tall stem + mid arm of the signature F
     shapes.append(poly([(0, 0), (STEM_W, 0), (STEM_W, TOP), (0, TOP)]))
-    shapes.append(poly([(STEM_W - 3, ARM_Y0), (STEM_W + ARM_W, ARM_Y0),
-                        (STEM_W + ARM_W, ARM_Y1), (STEM_W - 3, ARM_Y1)]))
+    shapes.append(poly([(STEM_W - 1, ARM_Y0), (STEM_W + ARM_W, ARM_Y0),
+                        (STEM_W + ARM_W, ARM_Y1), (STEM_W - 1, ARM_Y1)]))
     x = STEM_W + ARM_W + TRACK
     for ch in 'LETCHF':
         d, b = glyph(ch, x - b_left(ch)); letters.append(d); x += (b[2] - b[0]) * S + TRACK
@@ -85,27 +95,26 @@ def build(fg, brackets=True):
     bar_end = split - TRACK + BOLD / 2
     shapes.append(poly([(0, TOP), (bar_end, TOP), (bar_end, TOP + BAR_H), (0, TOP + BAR_H)]))
 
-    sp, left = stripes(fg)
-    body = sp + ''.join(f'<path d="{p}" fill="{fg}"/>' for p in shapes)
-    body += (f'<g fill="{fg}" stroke="{fg}" stroke-width="{BOLD}" stroke-linejoin="miter" '
-             f'stroke-miterlimit="4">' + ''.join(f'<path d="{d}"/>' for d in letters) + '</g>')
+    sp, left = stripes()
+    body = stroked(fg, sp + shapes + letters)
     g = f'<g transform="matrix(1 0 {-SKEW} 1 0 0)">{body}</g>'
+    left -= BOLD / 2; TOP_ = TOP - BOLD / 2
     minx, maxx = left, end - SKEW * TOP
     if not brackets:
         return g, (minx, TOP, maxx - minx, -TOP + BOLD / 2)
-    x0, x1, y0, y1 = minx - 40, maxx + 40, TOP - 34, 34
+    x0, x1, y0, y1 = minx - 40, maxx + 40, TOP_ - 34, 34
     return g + corners(fg, x0, y0, x1, y1, 38, 14), (x0, y0, x1 - x0, y1 - y0)
 
 
 def icon(fg):
+    R = 72
     ps = [poly([(0, 0), (STEM_W, 0), (STEM_W, TOP), (0, TOP)]),
-          poly([(0, TOP), (96, TOP), (96, TOP + BAR_H), (0, TOP + BAR_H)]),
-          poly([(STEM_W - 3, TOP + 2 * BAR_H), (80, TOP + 2 * BAR_H),
-                (80, TOP + 3 * BAR_H), (STEM_W - 3, TOP + 3 * BAR_H)])]
-    sp, left = stripes(fg)
-    body = sp + ''.join(f'<path d="{p}" fill="{fg}"/>' for p in ps)
-    g = f'<g transform="matrix(1 0 {-SKEW} 1 0 0)">{body}</g>'
-    cx = (left + 96 - SKEW * TOP) / 2; cy = TOP / 2
+          poly([(0, TOP), (R, TOP), (R, TOP + BAR_H), (0, TOP + BAR_H)]),
+          poly([(STEM_W - 1, ARM_Y0), (STEM_W + ARM_W, ARM_Y0),
+                (STEM_W + ARM_W, ARM_Y1), (STEM_W - 1, ARM_Y1)])]
+    sp, left = stripes()
+    g = f'<g transform="matrix(1 0 {-SKEW} 1 0 0)">{stroked(fg, sp + ps)}</g>'
+    cx = (left + R) / 2; cy = TOP / 2
     h = 122
     x0, x1, y0, y1 = cx - h, cx + h, cy - h, cy + h
     return g + corners(fg, x0, y0, x1, y1, 44, 16), (x0, y0, x1 - x0, y1 - y0)
