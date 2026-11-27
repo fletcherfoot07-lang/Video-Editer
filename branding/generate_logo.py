@@ -16,16 +16,16 @@ font = TTFont(f'{FD}/anton-latin-400-normal.ttf')
 gs = font.getGlyphSet(); cmap = font.getBestCmap()
 CAP = 1760
 S = 100 / CAP            # cap height -> 100 px
-SKEW = 0.21              # ~12deg italic lean
+SKEW = 0.0               # upright (no italic)
 BOLD = 5                 # extra stroke weight added to every letter (px)
 TRACK = 12 + BOLD        # letter spacing (px), widened to absorb the stroke
 
 BLACK, WHITE = '#0A0A0A', '#FFFFFF'
 
 # signature F geometry (cap height = 100)
-STEM_W, BAR_H, GAP = 34, 24, 12
+STEM_W, BAR_H, GAP = 36, 36, 12   # stem and bars share one thickness
 TOP = -100 - GAP - BAR_H           # top of overbar
-ARM_W, ARM_Y0, ARM_Y1 = 34, -64, -38
+ARM_W, ARM_Y0, ARM_Y1 = 36, -68, -32   # arm centred on cap height
 STRIPES = [8, 11, 14]              # speed stripes, thin -> thick toward the F
 STRIPE_GAP = 6
 
@@ -81,9 +81,9 @@ def build(fg, brackets=True):
         d, b = glyph(ch, x - b_left(ch)); letters.append(d); x += (b[2] - b[0]) * S + TRACK
     d, b = glyph('.', x - 4 - b_left('.')); letters.append(d)
     end = x - 4 + (b[2] - b[0]) * S + BOLD / 2
-    # overbar across LETCHF with a sharp angled cut
+    # chunky square-ended overbar across LETCHF
     bar_end = split - TRACK + BOLD / 2
-    shapes.append(poly([(0, TOP), (bar_end + 22, TOP), (bar_end, TOP + BAR_H), (0, TOP + BAR_H)]))
+    shapes.append(poly([(0, TOP), (bar_end, TOP), (bar_end, TOP + BAR_H), (0, TOP + BAR_H)]))
 
     sp, left = stripes(fg)
     body = sp + ''.join(f'<path d="{p}" fill="{fg}"/>' for p in shapes)
@@ -99,12 +99,13 @@ def build(fg, brackets=True):
 
 def icon(fg):
     ps = [poly([(0, 0), (STEM_W, 0), (STEM_W, TOP), (0, TOP)]),
-          poly([(0, TOP), (84, TOP), (66, TOP + BAR_H), (0, TOP + BAR_H)]),
-          poly([(STEM_W - 3, -70), (66, -70), (52, -46), (STEM_W - 3, -46)])]
+          poly([(0, TOP), (96, TOP), (96, TOP + BAR_H), (0, TOP + BAR_H)]),
+          poly([(STEM_W - 3, TOP + 2 * BAR_H), (80, TOP + 2 * BAR_H),
+                (80, TOP + 3 * BAR_H), (STEM_W - 3, TOP + 3 * BAR_H)])]
     sp, left = stripes(fg)
     body = sp + ''.join(f'<path d="{p}" fill="{fg}"/>' for p in ps)
     g = f'<g transform="matrix(1 0 {-SKEW} 1 0 0)">{body}</g>'
-    cx = (left + 84 - SKEW * TOP) / 2; cy = TOP / 2
+    cx = (left + 96 - SKEW * TOP) / 2; cy = TOP / 2
     h = 122
     x0, x1, y0, y1 = cx - h, cx + h, cy - h, cy + h
     return g + corners(fg, x0, y0, x1, y1, 44, 16), (x0, y0, x1 - x0, y1 - y0)
